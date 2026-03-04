@@ -138,7 +138,7 @@ export const getMyReservations = async (req: AuthRequest, res: Response) => {
     const db = await dbPromise;
 
     let query = `
-      SELECT r.id, r.reservation_date, r.created_at,
+      SELECT r.id, r.time_slot_id, r.gym_id, r.reservation_date, r.created_at,
              g.name as gym_name,
              ts.start_time, ts.end_time
       FROM reservations r

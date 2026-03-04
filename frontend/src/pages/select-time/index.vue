@@ -23,14 +23,15 @@
     <view v-else-if="timeSlots.length === 0" class="empty-state">
       <text class="empty-text">该日期暂无可预约时间段</text>
     </view>
-    <view v-else class="time-slots">
+    <view v-else class="time-slots" :class="{ 'has-reserved-slot': !!reservedSlotId }">
       <view
         v-for="slot in timeSlots"
         :key="slot.id"
         class="time-slot"
         :class="{
           'slot-full': slot.availableSlots === 0,
-          'slot-club-only': slot.isClubOnly
+          'slot-club-only': slot.isClubOnly,
+          'slot-reserved': slot.id === reservedSlotId
         }"
         @click="selectTimeSlot(slot)"
       >
@@ -41,15 +42,17 @@
             <text class="badge badge-capacity">{{ slot.availableSlots }}/{{ slot.maxCapacity }}</text>
           </view>
         </view>
-        <text class="slot-arrow">›</text>
+        <text v-if="slot.id === reservedSlotId" class="slot-reserved-text">已预约</text>
+        <text v-else class="slot-arrow">›</text>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { getTimeSlots, createReservation } from '@/api';
+import { ref, computed } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
+import { getTimeSlots, createReservation, getMyReservations } from '@/api';
 import { useUserStore } from '@/store/user';
 import type { TimeSlot } from '@/types';
 
@@ -61,6 +64,7 @@ const gymName = ref('');
 const selectedDate = ref('');
 const timeSlots = ref<TimeSlot[]>([]);
 const loading = ref(true);
+const reservedSlotId = ref<number | null>(null);
 
 // 生成日期列表（未来7天）
 const dates = computed(() => {
@@ -86,12 +90,28 @@ const dates = computed(() => {
   return dates;
 });
 
+// 加载用户的预约状态
+const loadUserReservation = async () => {
+  try {
+    const res = await getMyReservations(selectedDate.value);
+    // 找到这个健身房在这个日期的预约
+    const reservation = res.reservations.find(
+      (r: any) => r.reservation_date === selectedDate.value
+    );
+    reservedSlotId.value = reservation ? reservation.time_slot_id : null;
+  } catch (error) {
+    console.error('加载用户预约状态失败', error);
+  }
+};
+
 // 加载时间段
 const loadTimeSlots = async () => {
   try {
     loading.value = true;
     const res = await getTimeSlots(gymId.value, selectedDate.value);
     timeSlots.value = res.timeSlots;
+    // 同时加载用户的预约状态
+    await loadUserReservation();
   } catch (error) {
     uni.showToast({ title: '加载时间段失败', icon: 'none' });
   } finally {
@@ -107,6 +127,11 @@ const selectDate = (date: string) => {
 
 // 选择时间段并预约
 const selectTimeSlot = async (slot: TimeSlot) => {
+  // 如果已经预约了这个时间段，不允许重复点击
+  if (slot.id === reservedSlotId.value) {
+    return;
+  }
+
   if (slot.availableSlots === 0) {
     uni.showToast({ title: '该时间段名额已满', icon: 'none' });
     return;
@@ -131,6 +156,9 @@ const selectTimeSlot = async (slot: TimeSlot) => {
             reservationDate: selectedDate.value
           });
 
+          // 更新已预约的时间段ID
+          reservedSlotId.value = slot.id;
+
           uni.hideLoading();
           uni.showToast({ title: '预约成功', icon: 'success' });
 
@@ -146,7 +174,7 @@ const selectTimeSlot = async (slot: TimeSlot) => {
   });
 };
 
-onMounted(() => {
+onShow(() => {
   const pages = getCurrentPages();
   const currentPage = pages[pages.length - 1] as any;
   const options = currentPage.options;
@@ -223,6 +251,13 @@ onMounted(() => {
 .time-slots {
   padding: 20rpx;
 
+  // 当有已预约的时间段时，其他时间段透明度变为70%
+  &.has-reserved-slot {
+    .time-slot:not(.slot-reserved):not(.slot-full) {
+      opacity: 0.7;
+    }
+  }
+
   .time-slot {
     display: flex;
     align-items: center;
@@ -237,6 +272,23 @@ onMounted(() => {
 
       .slot-time {
         color: #9ca3af !important;
+      }
+    }
+
+    // 已预约的时间段样式：蓝色边框
+    &.slot-reserved {
+      border: 3rpx solid #3b82f6;
+      background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+
+      .slot-time {
+        color: #1d4ed8 !important;
+      }
+
+      .slot-reserved-text {
+        font-size: 28rpx;
+        font-weight: bold;
+        color: #3b82f6;
+        white-space: nowrap;
       }
     }
 

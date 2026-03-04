@@ -73,7 +73,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
 import { useUserStore } from '@/store/user';
 import { getMyReservations, cancelReservation, getReservationLimitStatus } from '@/api';
 import type { Reservation } from '@/types';
@@ -179,7 +180,7 @@ const handleLogout = () => {
   });
 };
 
-onMounted(() => {
+onShow(() => {
   loadTodayReservations();
 });
 </script>
