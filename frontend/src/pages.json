@@ -1,0 +1,87 @@
+{
+  "pages": [
+    {
+      "path": "pages/home/index",
+      "style": {
+        "navigationBarTitleText": "健身房预约"
+      }
+    },
+    {
+      "path": "pages/login/index",
+      "style": {
+        "navigationBarTitleText": "登录"
+      }
+    },
+    {
+      "path": "pages/select-gym/index",
+      "style": {
+        "navigationBarTitleText": "选择健身房"
+      }
+    },
+    {
+      "path": "pages/select-time/index",
+      "style": {
+        "navigationBarTitleText": "选择时间段"
+      }
+    },
+    {
+      "path": "pages/my-reservations/index",
+      "style": {
+        "navigationBarTitleText": "我的预约"
+      }
+    },
+    {
+      "path": "pages/announcement-detail/index",
+      "style": {
+        "navigationBarTitleText": "公告详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/admin/gyms/index",
+      "style": {
+        "navigationBarTitleText": "健身房管理"
+      }
+    },
+    {
+      "path": "pages/admin/time-slots/index",
+      "style": {
+        "navigationBarTitleText": "时间段管理"
+      }
+    },
+    {
+      "path": "pages/admin/users/index",
+      "style": {
+        "navigationBarTitleText": "用户管理"
+      }
+    },
+    {
+      "path": "pages/admin/announcements/index",
+      "style": {
+        "navigationBarTitleText": "公告管理"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "QHU健身房预约",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f5f5f5"
+  },
+  "tabBar": {
+    "color": "#7a7e83",
+    "selectedColor": "#3b82f6",
+    "borderStyle": "black",
+    "backgroundColor": "#ffffff",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/my-reservations/index",
+        "text": "我的预约"
+      }
+    ]
+  }
+}
