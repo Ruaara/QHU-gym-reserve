@@ -15,7 +15,7 @@ export const login = (data: { account: string; password: string }) => {
 
 // 获取当前用户信息
 export const getCurrentUser = () => {
-  return get<{ user: User }>('/auth/me');
+  return get<User>('/auth/me');
 };
 
 // ========== 健身房相关 ==========
@@ -35,7 +35,7 @@ export const getTimeSlots = (gymId: number, date?: string) => {
 // ========== 预约相关 ==========
 
 // 创建预约
-export const createReservation = (data: { gymId: number; timeSlotId: number; reservationDate: string }) => {
+export const createReservation = (data: { gymId: number; timeSlotId: number; reservationDate: string; useFreeReserve?: boolean }) => {
   return post<{ message: string; reservation: Reservation }>('/reservations', data);
 };
 
@@ -52,6 +52,16 @@ export const cancelReservation = (id: number) => {
 // 获取预约限制状态
 export const getReservationLimitStatus = () => {
   return get<ReservationLimitStatus>('/reservations/limit-status');
+};
+
+// 检查日期是否可预约
+export const checkDateAvailability = (date: string) => {
+  return get<{ date: string; canReserve: boolean; message: string }>(`/reservations/check-date?date=${date}`);
+};
+
+// 修改密码
+export const changePasswordApi = (data: { oldPassword: string; newPassword: string }) => {
+  return post<{ message: string }>('/auth/change-password', data);
 };
 
 // ========== 管理员相关 ==========
@@ -101,6 +111,21 @@ export const adminSetUserRole = (id: number, role: 'student' | 'admin') => {
 // 设置用户社团成员状态
 export const adminSetUserClub = (id: number, isClub: boolean) => {
   return put<{ message: string }>(`/admin/users/${id}/club`, { isClub });
+};
+
+// 设置用户免预约次数
+export const adminSetFreeReserveCount = (id: number, count: number) => {
+  return put<{ message: string; freeReserveCount: number }>(`/admin/users/${id}/free-reserve-count`, { count });
+};
+
+// 删除用户
+export const adminDeleteUser = (id: number) => {
+  return del<{ message: string }>(`/admin/users/${id}`);
+};
+
+// 批量操作用户
+export const adminBatchUpdateUsers = (data: { userIds: number[]; action: string; value?: string | number }) => {
+  return post<{ message: string; successCount: number }>('/admin/users/batch', data);
 };
 
 // 获取健身房管理列表
@@ -258,4 +283,39 @@ export const adminUpdateAnnouncement = (id: number, data: {
 // 删除公告
 export const adminDeleteAnnouncement = (id: number) => {
   return del<{ message: string }>(`/announcements/admin/${id}`);
+};
+
+// ========== 二维码相关 ==========
+
+// 获取我的二维码（今日预约）
+export const getMyQrCode = () => {
+  return get<{
+    reservation: {
+      id: number;
+      gymName: string;
+      startTime: string;
+      endTime: string;
+      date: string;
+    };
+    qrCodeData: string;
+    qrCodeImage: string;
+    isUsed: boolean;
+  }>('/qrcodes/my-qrcode');
+};
+
+// 验证二维码（管理员扫一扫）
+export const verifyQrCode = (qrCodeData: string) => {
+  return post<{ message: string; userName: string; userAccount: string; reservationDate: string }>('/qrcodes/verify', { qrCodeData });
+};
+
+// ========== 系统设置相关 ==========
+
+// 获取系统设置
+export const getSystemSettings = () => {
+  return get<{ settings: Record<string, { value: string; description: string }> }>('/settings');
+};
+
+// 更新系统设置
+export const updateSystemSettings = (settings: Record<string, string>) => {
+  return put<{ message: string }>('/settings', { settings });
 };

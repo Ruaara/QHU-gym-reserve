@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import {
   // 用户管理
-  getUsers, addUser, banUser, importClubMembers, setUserRole, setUserClub,
+  getUsers, addUser, banUser, importClubMembers, setUserRole, setUserClub, setUserFreeReserveCount, deleteUser, batchUpdateUsers,
   // 健身房管理
   getAdminGyms, addGym, updateGym, deleteGym, uploadGymImage, uploadGymImageHandler,
   // 时间段管理
@@ -39,6 +39,15 @@ router.put('/users/:id/role', mainAdminMiddleware, setUserRole);
 
 // 设置用户社团成员状态（需要管理员权限）
 router.put('/users/:id/club', adminMiddleware, setUserClub);
+
+// 设置用户免预约次数（需要管理员权限）
+router.put('/users/:id/free-reserve-count', adminMiddleware, setUserFreeReserveCount);
+
+// 删除用户（需要管理员权限）
+router.delete('/users/:id', adminMiddleware, deleteUser);
+
+// 批量操作用户（需要管理员权限）
+router.post('/users/batch', adminMiddleware, batchUpdateUsers);
 
 // ========== 健身房管理 ==========
 // 获取健身房管理列表（需要管理员权限）

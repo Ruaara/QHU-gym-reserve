@@ -4,24 +4,35 @@
     <AnnouncementSlider />
 
     <!-- 用户信息卡片 -->
-    <view class="user-card">
+    <view class="user-card" @click="goToProfile">
       <view class="user-info">
         <text class="user-name">{{ userStore.user?.name }}</text>
         <text class="user-account">学号：{{ userStore.user?.account }}</text>
       </view>
       <view class="user-actions">
-        <button class="btn-mini btn-primary" @click="handleLogout">退出登录</button>
+        <button class="btn-mini btn-primary" @click.stop="handleLogout">退出登录</button>
       </view>
     </view>
 
     <!-- 预约入口 -->
     <view class="section">
       <view class="section-title">快速预约</view>
-      <button class="reserve-btn" @click="goToReserve">
-        <text class="reserve-btn-icon">🏋️</text>
-        <text class="reserve-btn-text">立即预约健身房</text>
-        <text class="reserve-btn-arrow">›</text>
-      </button>
+      <view class="reserve-buttons">
+        <button class="reserve-btn" @click="goToReserve">
+          <text class="reserve-btn-icon">🏋️</text>
+          <text class="reserve-btn-text">立即预约</text>
+          <text class="reserve-btn-arrow">›</text>
+        </button>
+        <button
+          class="free-reserve-btn"
+          :class="{ 'has-count': freeReserveCount > 0, 'no-count': freeReserveCount === 0 }"
+          @click="goToFreeReserve"
+        >
+          <text class="free-reserve-icon">⭐</text>
+          <text class="free-reserve-text">免预约 ({{ freeReserveCount }})</text>
+          <text class="free-reserve-arrow">›</text>
+        </button>
+      </view>
     </view>
 
     <!-- 今日预约 -->
@@ -35,14 +46,29 @@
           v-for="reservation in todayReservations"
           :key="reservation.id"
           class="reservation-item"
+          :class="{ 'reservation-used': reservation.isUsed }"
         >
           <view class="reservation-info">
             <text class="reservation-gym">{{ reservation.gymName }}</text>
+            <text class="reservation-date">{{ formatReservationDate(reservation.reservationDate) }}</text>
             <text class="reservation-time">{{ reservation.startTime }} - {{ reservation.endTime }}</text>
           </view>
-          <button class="btn-change" @click.stop="handleChangeReservation(reservation.id)">
-            变更预约
-          </button>
+          <view class="reservation-actions">
+            <button
+              v-if="!reservation.isUsed"
+              class="btn-qrcode"
+              @click.stop="handleViewQrCode(reservation.id)"
+            >
+              📱 二维码
+            </button>
+            <button
+              v-if="!reservation.isUsed"
+              class="btn-change"
+              @click.stop="handleChangeReservation(reservation.id)"
+            >
+              变更预约
+            </button>
+          </view>
         </view>
       </view>
     </view>
@@ -67,21 +93,51 @@
           <text class="admin-icon">📢</text>
           <text class="admin-text">公告管理</text>
         </view>
+        <view class="admin-item" @click="goToAdmin('settings')">
+          <text class="admin-icon">⚙️</text>
+          <text class="admin-text">系统设置</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 二维码弹窗 -->
+    <view v-if="showQrCodeModal" class="modal-mask" @click="hideQrCodeModal">
+      <view class="modal-content" @click.stop>
+        <view class="modal-header">
+          <text class="modal-title">我的预约二维码</text>
+          <text class="modal-close" @click="hideQrCodeModal">×</text>
+        </view>
+        <view class="modal-body">
+          <view v-if="qrCodeReservation" class="qr-info">
+            <text class="qr-gym">{{ qrCodeReservation.gymName }}</text>
+            <text class="qr-time">{{ qrCodeReservation.date }} {{ qrCodeReservation.startTime }}-{{ qrCodeReservation.endTime }}</text>
+          </view>
+          <image v-if="qrCodeImage" :src="qrCodeImage" class="qr-code-image" mode="widthFix" />
+          <text class="qr-tip">请出示此二维码给管理员核销</text>
+        </view>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { useUserStore } from '@/store/user';
-import { getMyReservations, cancelReservation, getReservationLimitStatus } from '@/api';
+import { getMyReservations, cancelReservation, getReservationLimitStatus, getSystemSettings, getMyQrCode, getCurrentUser } from '@/api';
 import type { Reservation } from '@/types';
 import AnnouncementSlider from '@/components/AnnouncementSlider.vue';
 
 const userStore = useUserStore();
 const todayReservations = ref<Reservation[]>([]);
+const bookingOpenHours = ref(20); // 默认20:00
+const bookingOpenMinutes = ref(0);
+const showQrCodeModal = ref(false);
+const qrCodeImage = ref('');
+const qrCodeReservation = ref<any>(null);
+
+// 免预约次数
+const freeReserveCount = computed(() => userStore.user?.freeReserveCount || 0);
 
 // 获取今天的日期
 const getTodayDate = (): string => {
@@ -92,12 +148,87 @@ const getTodayDate = (): string => {
   return `${year}-${month}-${day}`;
 };
 
+// 获取明天的日期
+const getTomorrowDate = (): string => {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const year = tomorrow.getFullYear();
+  const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const day = String(tomorrow.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// 检查是否已过预约开放时间
+const isAfterBookingOpenTime = (): boolean => {
+  const now = new Date();
+  const hours = now.getHours();
+  const minutes = now.getMinutes();
+  const totalMinutes = hours * 60 + minutes;
+  const openMinutes = bookingOpenHours.value * 60 + bookingOpenMinutes.value;
+  return totalMinutes >= openMinutes;
+};
+
+// 格式化预约日期显示
+const formatReservationDate = (dateStr: string): string => {
+  const today = getTodayDate();
+  const tomorrow = getTomorrowDate();
+
+  if (dateStr === today) {
+    return '今天';
+  } else if (dateStr === tomorrow) {
+    return '明天';
+  } else {
+    // 手动解析日期字符串，避免时区问题
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      const year = parts[0];
+      const month = parts[1];
+      const day = parts[2];
+      return `${month}/${day}`;
+    }
+    return dateStr;
+  }
+};
+
+// 判断是否是今天
+const isToday = (dateStr: string): boolean => {
+  return dateStr === getTodayDate();
+};
+
+// 加载系统设置
+const loadSystemSettings = async () => {
+  try {
+    const res = await getSystemSettings();
+    const bookingTimeStr = res.settings['booking_open_time']?.value || '20:00';
+    const [hours, minutes] = bookingTimeStr.split(':').map(Number);
+    bookingOpenHours.value = hours;
+    bookingOpenMinutes.value = minutes;
+  } catch (error) {
+    console.error('加载系统设置失败', error);
+    // 使用默认值 20:00
+    bookingOpenHours.value = 20;
+    bookingOpenMinutes.value = 0;
+  }
+};
+
 // 加载今日预约
 const loadTodayReservations = async () => {
   try {
     const today = getTodayDate();
-    const res = await getMyReservations(today);
-    todayReservations.value = res.reservations;
+    const pastBookingOpenTime = isAfterBookingOpenTime();
+
+    // 加载今天的预约
+    const todayRes = await getMyReservations(today);
+    const reservations = [...todayRes.reservations];
+
+    // 如果已过预约开放时间，也加载明天的预约
+    if (pastBookingOpenTime) {
+      const tomorrow = getTomorrowDate();
+      const tomorrowRes = await getMyReservations(tomorrow);
+      reservations.push(...tomorrowRes.reservations);
+    }
+
+    todayReservations.value = reservations;
   } catch (error) {
     console.error('加载今日预约失败', error);
   }
@@ -106,6 +237,15 @@ const loadTodayReservations = async () => {
 // 去预约
 const goToReserve = () => {
   uni.navigateTo({ url: '/pages/select-gym/index' });
+};
+
+// 免预约
+const goToFreeReserve = () => {
+  if (freeReserveCount.value > 0) {
+    uni.navigateTo({ url: '/pages/select-gym/index?useFreeReserve=true' });
+  } else {
+    uni.showToast({ title: '免预约次数不足', icon: 'none' });
+  }
 };
 
 // 去管理页面
@@ -167,6 +307,36 @@ const handleChangeReservation = async (reservationId: number) => {
   }
 };
 
+// 跳转到个人中心
+const goToProfile = () => {
+  uni.navigateTo({ url: '/pages/profile/index' });
+};
+
+// 查看二维码
+const handleViewQrCode = async (reservationId: number) => {
+  try {
+    uni.showLoading({ title: '加载中...' });
+
+    const res = await getMyQrCode();
+    qrCodeReservation.value = res.reservation;
+    qrCodeImage.value = res.qrCodeImage;
+
+    uni.hideLoading();
+    showQrCodeModal.value = true;
+  } catch (error: any) {
+    uni.hideLoading();
+    uni.showToast({
+      title: error.error || '加载二维码失败',
+      icon: 'none'
+    });
+  }
+};
+
+// 关闭二维码弹窗
+const hideQrCodeModal = () => {
+  showQrCodeModal.value = false;
+};
+
 // 退出登录
 const handleLogout = () => {
   uni.showModal({
@@ -180,7 +350,22 @@ const handleLogout = () => {
   });
 };
 
-onShow(() => {
+onShow(async () => {
+  // 检查用户是否已登录
+  if (!userStore.isLoggedIn) {
+    uni.reLaunch({ url: '/pages/login/index' });
+    return;
+  }
+
+  // 刷新用户信息（以获取最新的免预约次数）
+  try {
+    const user = await getCurrentUser();
+    userStore.setUser(user);
+  } catch (error) {
+    console.error('刷新用户信息失败', error);
+  }
+
+  await loadSystemSettings();
   loadTodayReservations();
 });
 </script>
@@ -200,6 +385,12 @@ onShow(() => {
   border-radius: 16rpx;
   padding: 32rpx;
   margin-bottom: 20rpx;
+  cursor: pointer;
+  transition: opacity 0.3s;
+
+  &:active {
+    opacity: 0.8;
+  }
 
   .user-info {
     .user-name {
@@ -244,30 +435,70 @@ onShow(() => {
   }
 }
 
+.reserve-buttons {
+  display: flex;
+  gap: 16rpx;
+}
+
 .reserve-btn {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 16rpx;
-  padding: 32rpx;
+  padding: 32rpx 24rpx;
   border: none;
-  width: 100%;
 
   &-icon {
-    font-size: 56rpx;
+    font-size: 48rpx;
   }
 
   &-text {
     flex: 1;
-    font-size: 32rpx;
+    font-size: 30rpx;
     color: #fff;
     font-weight: bold;
-    margin-left: 24rpx;
+    margin-left: 16rpx;
   }
 
   &-arrow {
-    font-size: 56rpx;
+    font-size: 48rpx;
+    color: rgba(255, 255, 255, 0.6);
+  }
+}
+
+.free-reserve-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 16rpx;
+  padding: 32rpx 24rpx;
+  border: none;
+
+  &.has-count {
+    background: #dc2626;
+  }
+
+  &.no-count {
+    background: #9ca3af;
+  }
+
+  .free-reserve-icon {
+    font-size: 48rpx;
+  }
+
+  .free-reserve-text {
+    flex: 1;
+    font-size: 30rpx;
+    font-weight: bold;
+    margin-left: 16rpx;
+    color: #fff;
+  }
+
+  .free-reserve-arrow {
+    font-size: 48rpx;
     color: rgba(255, 255, 255, 0.6);
   }
 }
@@ -296,6 +527,20 @@ onShow(() => {
       margin-bottom: 0;
     }
 
+    // 已使用/核销的预约样式
+    &.reservation-used {
+      opacity: 0.5;
+
+      .reservation-gym {
+        color: #9ca3af !important;
+      }
+
+      .reservation-date,
+      .reservation-time {
+        color: #9ca3af !important;
+      }
+    }
+
     .reservation-info {
       flex: 1;
 
@@ -307,11 +552,33 @@ onShow(() => {
         margin-bottom: 8rpx;
       }
 
+      .reservation-date {
+        display: block;
+        font-size: 24rpx;
+        color: #6b7280;
+        margin-bottom: 4rpx;
+      }
+
       .reservation-time {
         display: block;
         font-size: 26rpx;
         color: #6b7280;
       }
+    }
+
+    .reservation-actions {
+      display: flex;
+      gap: 12rpx;
+    }
+
+    .btn-qrcode {
+      padding: 12rpx 20rpx;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #fff;
+      font-size: 24rpx;
+      border-radius: 8rpx;
+      border: none;
+      white-space: nowrap;
     }
 
     .btn-change {
@@ -326,10 +593,88 @@ onShow(() => {
   }
 }
 
+// 二维码弹窗样式
+.modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #fff;
+  border-radius: 24rpx;
+  padding: 40rpx;
+  width: 80%;
+  max-width: 600rpx;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 32rpx;
+
+  .modal-title {
+    font-size: 36rpx;
+    font-weight: bold;
+    color: #333;
+  }
+
+  .modal-close {
+    font-size: 56rpx;
+    color: #9ca3af;
+    cursor: pointer;
+  }
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.qr-info {
+  text-align: center;
+  margin-bottom: 32rpx;
+
+  .qr-gym {
+    display: block;
+    font-size: 32rpx;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 12rpx;
+  }
+
+  .qr-time {
+    display: block;
+    font-size: 26rpx;
+    color: #6b7280;
+  }
+}
+
+.qr-code-image {
+  width: 500rpx;
+  height: 500rpx;
+  margin-bottom: 24rpx;
+}
+
+.qr-tip {
+  font-size: 24rpx;
+  color: #9ca3af;
+  text-align: center;
+}
+
 .admin-section {
   .admin-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 16rpx;
   }
 

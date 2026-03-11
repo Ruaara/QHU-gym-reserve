@@ -4,7 +4,7 @@ import {
   getMyReservations,
   cancelReservation
 } from '../controllers/reservationController';
-import { getUserReservationLimit } from '../controllers/reservationLimitController';
+import { getUserReservationLimit, checkDateAvailability } from '../controllers/reservationLimitController';
 import { authMiddleware } from '../middleware/auth';
 
 const router = express.Router();
@@ -20,6 +20,9 @@ router.get('/my', getMyReservations);
 
 // 获取用户预约限制状态
 router.get('/limit-status', getUserReservationLimit);
+
+// 检查日期是否可预约
+router.get('/check-date', checkDateAvailability);
 
 // 取消预约
 router.delete('/:id', cancelReservation);

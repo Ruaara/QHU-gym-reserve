@@ -4,8 +4,7 @@
       <swiper
         :current="currentIndex"
         :indicator-dots="true"
-        :autoplay="true"
-        :interval="3000"
+        :autoplay="false"
         :circular="true"
         indicator-color="rgba(255, 255, 255, 0.5)"
         indicator-active-color="#ffffff"
@@ -20,9 +19,10 @@
         >
           <view class="announcement-card">
             <image
-              :src="item.imageUrl"
+              :src="item.imageUrl || defaultImage"
               class="announcement-image"
               mode="aspectFill"
+              @error="handleImageError(item)"
             />
             <view class="announcement-info">
               <text class="announcement-title">{{ item.title }}</text>
@@ -46,25 +46,39 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { getAnnouncements } from '@/api';
 
 interface Announcement {
   id: number;
   title: string;
   description: string;
-  imageUrl: string;
-  linkUrl: string;
+  imageUrl?: string;
+  linkUrl?: string;
 }
 
 const announcements = ref<Announcement[]>([]);
 const currentIndex = ref(0);
+let autoPlayTimer: number | null = null;
+
+// 默认公告图片
+const defaultImage = 'https://picsum.photos/seed/announcement/800/400.jpg';
+
+// 处理图片加载失败
+const handleImageError = (item: Announcement) => {
+  console.log('公告图片加载失败，使用默认图片:', item.title);
+  item.imageUrl = defaultImage;
+};
 
 // 加载公告列表
 const loadAnnouncements = async () => {
   try {
     const res = await getAnnouncements();
-    announcements.value = res.announcements;
+    // 为没有图片的公告设置默认图片
+    announcements.value = res.announcements.map((item: Announcement) => ({
+      ...item,
+      imageUrl: item.imageUrl || defaultImage
+    }));
   } catch (error) {
     console.error('加载公告失败:', error);
   }
@@ -82,11 +96,36 @@ const handleSwiperChange = (e: any) => {
   currentIndex.value = e.detail.current;
 };
 
+// 启动自动播放
+const startAutoPlay = () => {
+  stopAutoPlay(); // 先清除已有的定时器
+  autoPlayTimer = setInterval(() => {
+    const length = announcements.value.length;
+    if (length > 0) {
+      currentIndex.value = currentIndex.value === length - 1 ? 0 : currentIndex.value + 1;
+    }
+  }, 3000) as unknown as number;
+};
+
+// 停止自动播放
+const stopAutoPlay = () => {
+  if (autoPlayTimer !== null) {
+    clearInterval(autoPlayTimer);
+    autoPlayTimer = null;
+  }
+};
+
+// 重置自动播放（用户手动切换时调用）
+const resetAutoPlay = () => {
+  startAutoPlay();
+};
+
 // 上一张
 const prevSlide = () => {
   const length = announcements.value.length;
   if (length > 0) {
     currentIndex.value = currentIndex.value === 0 ? length - 1 : currentIndex.value - 1;
+    resetAutoPlay(); // 重置自动播放计时器
   }
 };
 
@@ -95,11 +134,17 @@ const nextSlide = () => {
   const length = announcements.value.length;
   if (length > 0) {
     currentIndex.value = currentIndex.value === length - 1 ? 0 : currentIndex.value + 1;
+    resetAutoPlay(); // 重置自动播放计时器
   }
 };
 
-onMounted(() => {
-  loadAnnouncements();
+onMounted(async () => {
+  await loadAnnouncements();
+  startAutoPlay(); // 启动自动播放
+});
+
+onUnmounted(() => {
+  stopAutoPlay(); // 组件卸载时清除定时器
 });
 </script>
 

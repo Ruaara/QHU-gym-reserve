@@ -1,5 +1,5 @@
 import express from 'express';
-import { register, login, getCurrentUser } from '../controllers/authController';
+import { register, login, getCurrentUser, changePassword } from '../controllers/authController';
 import { authMiddleware } from '../middleware/auth';
 
 const router = express.Router();
@@ -12,5 +12,8 @@ router.post('/login', login);
 
 // 获取当前用户信息
 router.get('/me', authMiddleware, getCurrentUser);
+
+// 修改密码
+router.post('/change-password', authMiddleware, changePassword);
 
 export default router;

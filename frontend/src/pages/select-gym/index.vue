@@ -19,7 +19,7 @@
           mode="aspectFill"
           @error.stop="handleImageError(index)"
         />
-        <text class="gym-name-overlay">{{ gym.name }}</text>
+        <text class="gym-name-overlay" :class="{ 'name-hidden': gymStates[gym.id]?.showDetail }">{{ gym.name }}</text>
         <view
           class="gym-overlay"
           :class="{ 'overlay-active': gymStates[gym.id]?.showDetail }"
@@ -57,6 +57,7 @@ const gyms = ref<Gym[]>([]);
 const gymStates = reactive<Record<number, GymState>>({});
 const loading = ref(true);
 const defaultImage = 'https://picsum.photos/seed/gym/400/400.jpg';
+const useFreeReserve = ref(false); // 是否使用免预约
 
 // 加载健身房列表
 const loadGyms = async () => {
@@ -93,12 +94,18 @@ const handleImageError = (index: number) => {
 // 点击卡片跳转
 const handleCardClick = (gym: Gym, index: number) => {
   if (gymStates[gym.id]?.showDetail) return; // 如果显示详情，不跳转
-  uni.navigateTo({
-    url: `/pages/select-time/index?gymId=${gym.id}&gymName=${encodeURIComponent(gym.name)}`
-  });
+  const url = `/pages/select-time/index?gymId=${gym.id}&gymName=${encodeURIComponent(gym.name)}` +
+    (useFreeReserve.value ? '&useFreeReserve=true' : '');
+  uni.navigateTo({ url });
 };
 
 onMounted(() => {
+  // 获取URL参数
+  const pages = getCurrentPages();
+  const currentPage = pages[pages.length - 1] as any;
+  const options = currentPage.options || {};
+  useFreeReserve.value = options.useFreeReserve === 'true';
+
   loadGyms();
 });
 </script>
@@ -162,6 +169,11 @@ onMounted(() => {
   z-index: 5;
   white-space: nowrap;
   opacity: 0.8;
+  transition: opacity 0.3s ease;
+
+  &.name-hidden {
+    opacity: 0;
+  }
 }
 
 .gym-overlay {

@@ -39,7 +39,7 @@ export const register = async (req: Request, res: Response) => {
     });
 
     // 获取新创建的用户信息
-    const userStmt = db.prepare('SELECT id, name, account, role, is_club, is_banned FROM users WHERE account = :account');
+    const userStmt = db.prepare('SELECT id, name, account, role, is_club, is_banned, free_reserve_count FROM users WHERE account = :account');
     const user = userStmt.getAsObject({ ':account': account }) as any;
 
     // 生成 token
@@ -58,7 +58,8 @@ export const register = async (req: Request, res: Response) => {
         name: user.name,
         account: user.account,
         role: user.role,
-        isClub: user.is_club === 1
+        isClub: user.is_club === 1,
+        freeReserveCount: user.free_reserve_count || 0
       }
     });
   } catch (error) {
@@ -114,7 +115,8 @@ export const login = async (req: Request, res: Response) => {
         name: user.name,
         account: user.account,
         role: user.role,
-        isClub: user.is_club === 1
+        isClub: user.is_club === 1,
+        freeReserveCount: user.free_reserve_count || 0
       }
     });
   } catch (error) {
@@ -129,7 +131,7 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
     const db = await dbPromise;
 
     const stmt = db.prepare(`
-      SELECT id, name, account, role, is_club, is_banned
+      SELECT id, name, account, role, is_club, is_banned, free_reserve_count
       FROM users
       WHERE id = :id
     `);
@@ -145,10 +147,64 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
       account: user.account,
       role: user.role,
       isClub: user.is_club === 1,
-      isBanned: user.is_banned === 1
+      isBanned: user.is_banned === 1,
+      freeReserveCount: user.free_reserve_count || 0
     });
   } catch (error) {
     console.error('获取用户信息错误:', error);
     res.status(500).json({ error: '获取用户信息失败' });
+  }
+};
+
+// 修改密码
+export const changePassword = async (req: AuthRequest, res: Response) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    // 验证必填字段
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: '请填写完整信息' });
+    }
+
+    // 验证新密码长度
+    if (newPassword.length < 6 || newPassword.length > 20) {
+      return res.status(400).json({ error: '新密码长度应为6-20位' });
+    }
+
+    if (oldPassword === newPassword) {
+      return res.status(400).json({ error: '新密码不能与原密码相同' });
+    }
+
+    const db = await dbPromise;
+    const userId = req.user!.userId;
+
+    // 获取用户信息
+    const userStmt = db.prepare('SELECT * FROM users WHERE id = :id');
+    const user = userStmt.getAsObject({ ':id': userId }) as any;
+
+    if (!user || !user.id) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    // 验证原密码
+    const isPasswordValid = bcrypt.compareSync(oldPassword, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: '原密码错误' });
+    }
+
+    // 加密新密码
+    const hashedPassword = bcrypt.hashSync(newPassword, 10);
+
+    // 更新密码
+    const updateStmt = db.prepare('UPDATE users SET password = :password WHERE id = :id');
+    updateStmt.run({
+      ':password': hashedPassword,
+      ':id': userId
+    });
+
+    res.json({ message: '密码修改成功' });
+  } catch (error) {
+    console.error('修改密码错误:', error);
+    res.status(500).json({ error: '修改密码失败' });
   }
 };

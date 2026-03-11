@@ -56,7 +56,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     const search = req.query.search as string;
 
     let query = `
-      SELECT id, name, account, role, is_club, is_banned, created_at
+      SELECT id, name, account, role, is_club, is_banned, created_at, free_reserve_count
       FROM users
       WHERE role != 'main_admin'
     `;
@@ -80,7 +80,8 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
       users: filteredUsers.map((u: any) => ({
         ...u,
         isClub: u.is_club === 1,
-        isBanned: u.is_banned === 1
+        isBanned: u.is_banned === 1,
+        freeReserveCount: u.free_reserve_count || 0
       }))
     });
   } catch (error) {
@@ -302,6 +303,220 @@ export const setUserClub = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// 设置用户免预约次数（管理员）
+export const setUserFreeReserveCount = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.params.id;
+    const { count } = req.body;
+
+    // 验证次数范围
+    if (typeof count !== 'number' || count < 0 || count > 999) {
+      return res.status(400).json({ error: '免预约次数必须在0-999之间' });
+    }
+
+    const db = await dbPromise;
+
+    // 检查用户是否存在
+    const userStmt = db.prepare('SELECT * FROM users WHERE id = :id');
+    const user = userStmt.getAsObject({ ':id': userId }) as any;
+
+    if (!user || !user.id) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    // 更新免预约次数
+    const updateStmt = db.prepare('UPDATE users SET free_reserve_count = :count WHERE id = :id');
+    updateStmt.run({ ':count': count, ':id': userId });
+
+    saveDatabase();
+
+    res.json({ message: '设置免预约次数成功', freeReserveCount: count });
+  } catch (error) {
+    console.error('设置免预约次数错误:', error);
+    res.status(500).json({ error: '设置免预约次数失败' });
+  }
+};
+
+// 删除用户
+export const deleteUser = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.params.id;
+
+    // 不能删除自己
+    if (parseInt(userId) === req.user!.userId) {
+      return res.status(400).json({ error: '不能删除自己' });
+    }
+
+    const db = await dbPromise;
+
+    // 检查用户是否存在
+    const userStmt = db.prepare('SELECT * FROM users WHERE id = :id');
+    const user = userStmt.getAsObject({ ':id': userId }) as any;
+
+    if (!user || !user.id) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    // 不能删除主管理员
+    if (user.role === 'main_admin') {
+      return res.status(403).json({ error: '不能删除主管理员' });
+    }
+
+    // 删除用户的预约记录
+    const deleteReservationsStmt = db.prepare('DELETE FROM reservations WHERE user_id = :userId');
+    deleteReservationsStmt.run({ ':userId': userId });
+
+    // 删除用户的预约限制记录
+    const deleteLimitsStmt = db.prepare('DELETE FROM reservation_limits WHERE user_id = :userId');
+    deleteLimitsStmt.run({ ':userId': userId });
+
+    // 删除用户的二维码记录
+    const deleteQrCodesStmt = db.prepare('DELETE FROM qr_codes WHERE user_id = :userId');
+    deleteQrCodesStmt.run({ ':userId': userId });
+
+    // 删除用户
+    const deleteStmt = db.prepare('DELETE FROM users WHERE id = :id');
+    deleteStmt.run({ ':id': userId });
+
+    saveDatabase();
+
+    res.json({ message: '删除用户成功' });
+  } catch (error) {
+    console.error('删除用户错误:', error);
+    res.status(500).json({ error: '删除用户失败' });
+  }
+};
+
+// 批量操作用户
+export const batchUpdateUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userIds, action, value } = req.body;
+
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: '请选择要操作的用户' });
+    }
+
+    if (!action) {
+      return res.status(400).json({ error: '请指定操作类型' });
+    }
+
+    const db = await dbPromise;
+    const currentUserId = req.user!.userId;
+
+    // 检查每个用户
+    for (const userId of userIds) {
+      const userStmt = db.prepare('SELECT * FROM users WHERE id = :id');
+      const user = userStmt.getAsObject({ ':id': userId }) as any;
+
+      if (!user || !user.id) {
+        return res.status(404).json({ error: `用户 ID ${userId} 不存在` });
+      }
+
+      // 不能对主管理员进行某些操作
+      if (user.role === 'main_admin' && ['delete', 'ban'].includes(action)) {
+        return res.status(403).json({ error: '不能对主管理员进行此操作' });
+      }
+
+      // 不能对自己进行操作
+      if (parseInt(userId) === currentUserId) {
+        return res.status(400).json({ error: '不能对自己进行此操作' });
+      }
+    }
+
+    let successCount = 0;
+    let message = '';
+
+    switch (action) {
+      case 'delete':
+        const deleteResStmt = db.prepare('DELETE FROM reservations WHERE user_id = :userId');
+        const deleteLimitsStmt = db.prepare('DELETE FROM reservation_limits WHERE user_id = :userId');
+        const deleteQrStmt = db.prepare('DELETE FROM qr_codes WHERE user_id = :userId');
+        const deleteUserStmt = db.prepare('DELETE FROM users WHERE id = :id');
+        for (const userId of userIds) {
+          // 删除用户的预约记录
+          deleteResStmt.bind({ ':userId': userId });
+          deleteResStmt.run();
+          // 删除用户的预约限制记录
+          deleteLimitsStmt.bind({ ':userId': userId });
+          deleteLimitsStmt.run();
+          // 删除用户的二维码记录
+          deleteQrStmt.bind({ ':userId': userId });
+          deleteQrStmt.run();
+          // 删除用户
+          deleteUserStmt.bind({ ':id': userId });
+          deleteUserStmt.run();
+          successCount++;
+        }
+        message = `成功删除 ${successCount} 个用户`;
+        break;
+
+      case 'ban':
+        const banStmt = db.prepare('UPDATE users SET is_banned = 1 WHERE id = :id');
+        for (const userId of userIds) {
+          banStmt.bind({ ':id': userId });
+          banStmt.run();
+          successCount++;
+        }
+        message = `成功封禁 ${successCount} 个用户`;
+        break;
+
+      case 'unban':
+        const unbanStmt = db.prepare('UPDATE users SET is_banned = 0 WHERE id = :id');
+        for (const userId of userIds) {
+          unbanStmt.bind({ ':id': userId });
+          unbanStmt.run();
+          successCount++;
+        }
+        message = `成功解封 ${successCount} 个用户`;
+        break;
+
+      case 'setClub':
+        const setClubStmt = db.prepare('UPDATE users SET is_club = 1 WHERE id = :id');
+        for (const userId of userIds) {
+          setClubStmt.bind({ ':id': userId });
+          setClubStmt.run();
+          successCount++;
+        }
+        message = `成功设为社团成员 ${successCount} 个用户`;
+        break;
+
+      case 'removeClub':
+        const removeClubStmt = db.prepare('UPDATE users SET is_club = 0 WHERE id = :id');
+        for (const userId of userIds) {
+          removeClubStmt.bind({ ':id': userId });
+          removeClubStmt.run();
+          successCount++;
+        }
+        message = `成功取消社团成员 ${successCount} 个用户`;
+        break;
+
+      case 'setFreeReserve':
+        const count = parseInt(value as string);
+        if (isNaN(count) || count < 0 || count > 999) {
+          return res.status(400).json({ error: '免预约次数必须在0-999之间' });
+        }
+        const setFreeStmt = db.prepare('UPDATE users SET free_reserve_count = :count WHERE id = :id');
+        for (const userId of userIds) {
+          setFreeStmt.bind({ ':count': count, ':id': userId });
+          setFreeStmt.run();
+          successCount++;
+        }
+        message = `成功设置免预约次数 ${successCount} 个用户`;
+        break;
+
+      default:
+        return res.status(400).json({ error: '无效的操作类型' });
+    }
+
+    saveDatabase();
+
+    res.json({ message, successCount });
+  } catch (error) {
+    console.error('批量操作用户错误:', error);
+    res.status(500).json({ error: '批量操作失败' });
+  }
+};
+
 // ========== 健身房管理 ==========
 
 // 获取健身房管理列表
@@ -398,7 +613,7 @@ export const updateGym = async (req: AuthRequest, res: Response) => {
     }
 
     // 如果更换了图片，删除旧图片
-    if (imageUrl && gym.image_url !== imageUrl) {
+    if (imageUrl && gym.image_url && gym.image_url !== imageUrl) {
       const oldImagePath = path.join(__dirname, '../../..', gym.image_url);
       if (fs.existsSync(oldImagePath) && gym.image_url.startsWith('/uploads/')) {
         fs.unlinkSync(oldImagePath);

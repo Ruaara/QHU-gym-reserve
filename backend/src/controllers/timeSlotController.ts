@@ -40,7 +40,8 @@ export const getTimeSlots = async (req: AuthRequest, res: Response) => {
       filteredSlots = timeSlots.filter((ts: any) => !ts.is_club_only);
     }
 
-    // 如果指定了日期，查询每个时间段的已预约人数
+    // 如果指定了日期，查询每个时间段的已预约人数和用户预约状态
+    const userId = req.user?.userId;
     if (date) {
       filteredSlots = filteredSlots.map((ts: any) => {
         const countStmt = db.prepare(`
@@ -48,7 +49,34 @@ export const getTimeSlots = async (req: AuthRequest, res: Response) => {
           FROM reservations
           WHERE time_slot_id = :slotId AND reservation_date = :date
         `);
-        const result = countStmt.getAsObject({ ':slotId': ts.id, ':date': date }) as { count: number };
+        countStmt.bind({ ':slotId': ts.id, ':date': date });
+        countStmt.step();
+        const result = countStmt.getAsObject() as { count: number };
+        console.log(`[getTimeSlots] Slot ${ts.id} (${ts.start_time}-${ts.end_time}): count=${result.count}, maxCapacity=${ts.max_capacity}, availableSlots=${ts.max_capacity - result.count}`);
+
+        // 查询用户在此时间段的预约和核销状态
+        let userReservation = null;
+        let isUsed = false;
+        if (userId) {
+          const userResStmt = db.prepare(`
+            SELECT r.id, r.user_id, qc.is_used
+            FROM reservations r
+            LEFT JOIN qr_codes qc ON r.id = qc.reservation_id
+            WHERE r.user_id = :userId AND r.time_slot_id = :slotId AND r.reservation_date = :date
+          `);
+          userResStmt.bind({
+            ':userId': userId,
+            ':slotId': ts.id,
+            ':date': date
+          });
+          if (userResStmt.step()) {
+            userReservation = userResStmt.getAsObject() as any;
+          }
+
+          if (userReservation && userReservation.id) {
+            isUsed = userReservation.is_used === 1;
+          }
+        }
 
         return {
           id: ts.id,
@@ -59,7 +87,9 @@ export const getTimeSlots = async (req: AuthRequest, res: Response) => {
           maxCapacity: ts.max_capacity,
           isClubOnly: ts.is_club_only === 1,
           isActive: ts.is_active === 1,
-          availableSlots: ts.max_capacity - (result.count || 0)
+          availableSlots: ts.max_capacity - (result.count || 0),
+          userReserved: !!userReservation && userReservation.id,
+          isUsed: isUsed
         };
       });
     } else {

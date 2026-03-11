@@ -4,35 +4,55 @@ import { saveDatabase } from '../database/init';
 import { AuthRequest } from '../middleware/auth';
 import {
   canUserReserve,
-  recordCancelledReservation,
-  hasUserCancelledSlot
+  canReserveForDate,
+  setUserReserved
 } from './reservationLimitController';
+import { createQrCode, deleteQrCode } from './qrCodeController';
+import { getBookingOpenTime } from './systemSettingsController';
+import fs from 'fs';
+
+const logFile = '/tmp/reservation_controller.log';
 
 // 创建预约
 export const createReservation = async (req: AuthRequest, res: Response) => {
   try {
-    const { gymId, timeSlotId, reservationDate } = req.body;
+    const { gymId, timeSlotId, reservationDate, useFreeReserve = false } = req.body;
 
     // 验证必填字段
     if (!gymId || !timeSlotId || !reservationDate) {
       return res.status(400).json({ error: '请填写完整信息' });
     }
 
+    // 检查预约日期是否开放
+    if (!(await canReserveForDate(reservationDate))) {
+      const bookingOpenTime = await getBookingOpenTime();
+      const timeStr = `${String(bookingOpenTime.hours).padStart(2, '0')}:${String(bookingOpenTime.minutes).padStart(2, '0')}`;
+      return res.status(400).json({ error: `该日期的预约尚未开放，请在${timeStr}后预约明天的时段` });
+    }
+
     const userId = req.user!.userId;
-
-    // 检查用户今天是否已预约（每日预约限制）
-    const canReserve = await canUserReserve(userId);
-    if (!canReserve) {
-      return res.status(400).json({ error: '您今天已预约过，每天只能预约一次' });
-    }
-
-    // 检查是否已取消过该时间段（防止重复预约已取消的时间段）
-    const hasCancelled = await hasUserCancelledSlot(userId, timeSlotId, reservationDate);
-    if (hasCancelled) {
-      return res.status(400).json({ error: '您今天已取消过该时间段，不能重复预约' });
-    }
-
     const db = await dbPromise;
+    const dbId = (db as any).__instanceId || 'unknown';
+    const msg0 = `[createReservation] DB instance #${dbId}, user: ${userId}`;
+    console.log(msg0);
+    fs.appendFileSync(logFile, msg0 + '\n');
+
+    // 如果使用免预约，检查免预约次数
+    if (useFreeReserve) {
+      const userStmt = db.prepare('SELECT free_reserve_count FROM users WHERE id = :id');
+      const user = userStmt.getAsObject({ ':id': userId }) as any;
+      const freeReserveCount = user?.free_reserve_count || 0;
+
+      if (freeReserveCount <= 0) {
+        return res.status(400).json({ error: '免预约次数不足' });
+      }
+    } else {
+      // 不使用免预约时，检查用户今天是否已预约（每日预约限制）
+      const canReserve = await canUserReserve(userId);
+      if (!canReserve) {
+        return res.status(400).json({ error: '您今天已预约过，每天只能预约一次' });
+      }
+    }
 
     // 检查时间段是否存在
     const slotStmt = db.prepare('SELECT * FROM time_slots WHERE id = :slotId AND is_active = 1');
@@ -52,28 +72,33 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       SELECT id FROM reservations
       WHERE user_id = :userId AND time_slot_id = :slotId AND reservation_date = :date
     `);
-    const existingReservation = checkStmt.getAsObject({
+    checkStmt.bind({
       ':userId': userId,
       ':slotId': timeSlotId,
       ':date': reservationDate
-    }) as any;
+    });
+    const hasExistingReservation = checkStmt.step();
 
-    if (existingReservation && existingReservation.id) {
+    if (hasExistingReservation) {
       return res.status(400).json({ error: '您已预约该时间段' });
     }
 
-    // 检查名额是否已满
-    const countStmt = db.prepare(`
-      SELECT COUNT(*) as count FROM reservations
-      WHERE time_slot_id = :slotId AND reservation_date = :date
-    `);
-    const reservationCount = countStmt.getAsObject({
-      ':slotId': timeSlotId,
-      ':date': reservationDate
-    }) as { count: number };
-
-    if ((reservationCount.count || 0) >= timeSlot.max_capacity) {
-      return res.status(400).json({ error: '该时间段名额已满' });
+    // 如果不使用免预约，检查名额是否已满
+    if (!useFreeReserve) {
+      const countStmt = db.prepare(`
+        SELECT COUNT(*) as count FROM reservations
+        WHERE time_slot_id = :slotId AND reservation_date = :date
+      `);
+      countStmt.bind({
+        ':slotId': timeSlotId,
+        ':date': reservationDate
+      });
+      if (countStmt.step()) {
+        const reservationCount = countStmt.getAsObject() as { count: number };
+        if ((reservationCount.count || 0) >= timeSlot.max_capacity) {
+          return res.status(400).json({ error: '该时间段名额已满' });
+        }
+      }
     }
 
     // 创建预约
@@ -81,24 +106,47 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       INSERT INTO reservations (user_id, gym_id, time_slot_id, reservation_date)
       VALUES (:userId, :gymId, :slotId, :date)
     `);
+    const msg = `[createReservation] About to insert reservation for user ${userId}`;
+    console.log(msg);
+    fs.appendFileSync(logFile, msg + '\n');
     insertStmt.run({
       ':userId': userId,
       ':gymId': gymId,
       ':slotId': timeSlotId,
       ':date': reservationDate
     });
+    const msg2 = `[createReservation] Insert executed, checking count...`;
+    console.log(msg2);
+    fs.appendFileSync(logFile, msg2 + '\n');
 
-    // 设置用户已预约状态（直接更新，不再调用 checkAndResetDailyLimit）
-    const updateLimitStmt = db.prepare(`
-      UPDATE reservation_limits
-      SET today_reserved = 1
-      WHERE user_id = :userId
-    `);
-    updateLimitStmt.run({ ':userId': userId });
+    // Check if reservation was actually inserted
+    const countStmt2 = db.prepare('SELECT COUNT(*) as count FROM reservations');
+    if (countStmt2.step()) {
+      const result = countStmt2.getAsObject();
+      const msg3 = `[createReservation] Reservation count after insert: ${result.count}`;
+      console.log(msg3);
+      fs.appendFileSync(logFile, msg3 + '\n');
+    }
+
+    // 如果使用免预约，扣减免预约次数
+    if (useFreeReserve) {
+      const updateFreeReserveStmt = db.prepare(`
+        UPDATE users
+        SET free_reserve_count = free_reserve_count - 1
+        WHERE id = :userId
+      `);
+      updateFreeReserveStmt.run({ ':userId': userId });
+    } else {
+      // 设置用户已预约状态（使用现有函数确保一致性）
+      await setUserReserved(userId);
+    }
 
     // 获取新插入的预约ID
     const lastIdStmt = db.prepare('SELECT last_insert_rowid() as id');
     const lastId = lastIdStmt.getAsObject({}) as { id: number };
+
+    // 生成二维码
+    await createQrCode(lastId.id, userId);
 
     // 获取完整的预约信息
     const reservationStmt = db.prepare(`
@@ -140,10 +188,12 @@ export const getMyReservations = async (req: AuthRequest, res: Response) => {
     let query = `
       SELECT r.id, r.time_slot_id, r.gym_id, r.reservation_date, r.created_at,
              g.name as gym_name,
-             ts.start_time, ts.end_time
+             ts.start_time, ts.end_time,
+             qc.is_used as qr_is_used
       FROM reservations r
       JOIN gyms g ON r.gym_id = g.id
       JOIN time_slots ts ON r.time_slot_id = ts.id
+      LEFT JOIN qr_codes qc ON r.id = qc.reservation_id
       WHERE r.user_id = :userId
     `;
 
@@ -179,6 +229,7 @@ export const getMyReservations = async (req: AuthRequest, res: Response) => {
         ...r,
         startTime: r.start_time,
         endTime: r.end_time,
+        isUsed: r.qr_is_used === 1,
         todayChange
       })),
       todayChange
@@ -218,8 +269,8 @@ export const cancelReservation = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: '今日更改机会已用尽' });
     }
 
-    // 记录取消的预约（防止重复预约）
-    await recordCancelledReservation(userId, reservation.time_slot_id, reservation.reservation_date);
+    // 删除对应的二维码（先删除，因为外键约束）
+    await deleteQrCode(parseInt(reservationId));
 
     // 删除预约
     const deleteStmt = db.prepare('DELETE FROM reservations WHERE id = :id');
